@@ -17,6 +17,6 @@ def create_invoice_pdf(client, service, amount, currency, date):
     c.drawString(100, 710, f"Amount: {amount} {currency}")
     c.drawString(100, 690, f"Date: {date}")
     c.drawString(100, 650, "Thank you for your business!")
-
     c.save()
+
     return path
