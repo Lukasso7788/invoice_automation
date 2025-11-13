@@ -1,18 +1,30 @@
 import os
 import base64
 import requests
+import logging
 
+log = logging.getLogger(__name__)
+
+# ---- Load ENV ----
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_NAME = os.getenv("SENDER_NAME", "Invoice Automation Bot")
 
+# ---- Safety Checks ----
+if not RESEND_API_KEY:
+    log.error("❌ ERROR: RESEND_API_KEY отсутствует в Render Environment Variables!")
+if not SENDER_EMAIL:
+    log.error("❌ ERROR: SENDER_EMAIL отсутствует в переменных окружения!")
+
 
 def send_invoice_email(to_email, client, pdf_path, amount, currency, service, stripe_url):
     """
-    Отправляет email через Resend API с PDF-вложением.
+    Отправляет email через Resend API, прикладывая PDF-инвойс + Stripe payment link.
     """
 
-    url = "https://api.resend.com/emails"
+    if not RESEND_API_KEY:
+        log.error("❌ НЕТ API КЛЮЧА RESEND → email отправить невозможно.")
+        return False
 
     # HTML письмо
     html = f"""
@@ -34,8 +46,12 @@ def send_invoice_email(to_email, client, pdf_path, amount, currency, service, st
     """
 
     # PDF → base64
-    with open(pdf_path, "rb") as f:
-        pdf_data = base64.b64encode(f.read()).decode()
+    try:
+        with open(pdf_path, "rb") as f:
+            pdf_data = base64.b64encode(f.read()).decode()
+    except Exception as e:
+        log.error(f"❌ Ошибка чтения PDF: {e}")
+        return False
 
     attachments = [
         {
@@ -58,8 +74,17 @@ def send_invoice_email(to_email, client, pdf_path, amount, currency, service, st
         "Content-Type": "application/json"
     }
 
-    r = requests.post(url, json=payload, headers=headers)
+    try:
+        response = requests.post("https://api.resend.com/emails", json=payload, headers=headers)
+    except Exception as e:
+        log.error(f"❌ Ошибка HTTP запроса к Resend: {e}")
+        return False
 
-    print("📧 Resend response:", r.status_code, r.text)
+    log.info(f"📧 Resend response: {response.status_code} {response.text}")
 
-    return r.status_code == 200
+    if response.status_code in (200, 202):
+        log.info("✅ Email sent successfully")
+        return True
+    else:
+        log.error(f"❌ Email sending failed: {response.text}")
+        return False
