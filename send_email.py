@@ -1,64 +1,65 @@
-import smtplib
-from email.message import EmailMessage
 import os
-from dotenv import load_dotenv
-import stripe
+import base64
+import requests
 
-load_dotenv()
-
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-STRIPE_API_KEY = os.getenv("STRIPE_API_KEY")
-
-stripe.api_key = STRIPE_API_KEY
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+SENDER_NAME = os.getenv("SENDER_NAME", "Invoice Automation Bot")
 
 
-def create_payment_link(amount, currency, description):
-    # Stripe принимает сумму в центах: 25.00$ → 2500
-    amount_cents = int(float(amount) * 100)
+def send_invoice_email(to_email, client, pdf_path, amount, currency, service, stripe_url):
+    """
+    Отправляет email через Resend API с PDF-вложением.
+    """
 
-    payment_link = stripe.PaymentLink.create(
-        line_items=[{
-            "price_data": {
-                "currency": currency.lower(),
-                "product_data": {"name": description},
-                "unit_amount": amount_cents
-            },
-            "quantity": 1
-        }]
-    )
-    return payment_link.url
+    url = "https://api.resend.com/emails"
 
+    # HTML письмо
+    html = f"""
+    <div style="font-family: Arial; padding: 20px;">
+        <h2>Hello, {client} 👋</h2>
+        <p>Here is your invoice for: <b>{service}</b></p>
+        <p><b>Amount:</b> {amount} {currency}</p>
 
-def send_invoice_email(recipient, client, pdf_path, amount, currency, service):
-    # создаём платёжную ссылку
-    link = create_payment_link(amount, currency, f"{service} — {client}")
+        <p>You can complete payment securely using Stripe:</p>
 
-    msg = EmailMessage()
-    msg["Subject"] = f"Invoice for {client}"
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = recipient
+        <a href="{stripe_url}"
+           style="background:#635BFF;color:white;padding:12px 20px;
+                  border-radius:6px;text-decoration:none;font-size:16px;">
+            Pay Invoice
+        </a>
 
-    msg.set_content(
-        f"Hi {client},\n\n"
-        f"Here is your invoice for *{service}*.\n\n"
-        f"Amount due: {amount} {currency}\n\n"
-        f"💳 Pay here: {link}\n\n"
-        f"Thank you!"
-    )
+        <p style="margin-top:25px;">PDF invoice is attached.</p>
+    </div>
+    """
 
-    # attach PDF
+    # PDF → base64
     with open(pdf_path, "rb") as f:
-        msg.add_attachment(
-            f.read(),
-            maintype="application",
-            subtype="pdf",
-            filename=os.path.basename(pdf_path)
-        )
+        pdf_data = base64.b64encode(f.read()).decode()
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        smtp.send_message(msg)
+    attachments = [
+        {
+            "filename": os.path.basename(pdf_path),
+            "content": pdf_data,
+            "type": "application/pdf"
+        }
+    ]
 
-    print(f"📤 Invoice sent to {recipient}")
-    print(f"💳 Stripe link: {link}")
+    payload = {
+        "from": f"{SENDER_NAME} <{SENDER_EMAIL}>",
+        "to": [to_email],
+        "subject": "Your Invoice",
+        "html": html,
+        "attachments": attachments
+    }
+
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    r = requests.post(url, json=payload, headers=headers)
+
+    print("📧 Resend response:", r.status_code, r.text)
+
+    return r.status_code == 200

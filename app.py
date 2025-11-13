@@ -86,7 +86,7 @@ def new_invoice():
         return jsonify({"error": "missing fields", "received": data}), 400
 
     pdf_path = create_invoice_pdf(client, service, amount, currency, date)
-    send_invoice_email(email, client, pdf_path, amount, currency, service)
+    send_invoice_email(email, client, pdf_path, amount, currency, service, stripe_url)
 
     return jsonify({"status": "ok", "data": data, "pdf": pdf_path})
 
