@@ -23,7 +23,7 @@ def new_invoice():
         return jsonify({"error": "missing fields"}), 400
 
     pdf_path = create_invoice_pdf(client, service, amount, currency, date)
-    send_invoice_email(email, client, pdf_path)
+    send_invoice_email(email, client, pdf_path, amount, currency, service)
 
     return jsonify({"status": "ok", "client": client, "pdf": pdf_path})
 
