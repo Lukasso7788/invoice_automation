@@ -6,9 +6,6 @@ from dotenv import load_dotenv
 from invoice_generator import create_invoice_pdf
 from send_email import send_invoice_email
 
-# ==========================
-# Настройка логов (работает на Render)
-# ==========================
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
@@ -19,66 +16,64 @@ log = logging.getLogger(__name__)
 load_dotenv()
 app = Flask(__name__)
 
-# ==========================
-# Helper: парсинг Webflow form-data
-# ==========================
-def parse_webflow_form():
-    form = request.form.to_dict()
-    parsed = {}
 
-    # data[client], data[email] → client, email
-    for key, value in form.items():
+def parse_webflow_json(payload):
+    """Парсинг Webflow JSON → data[...] поля"""
+    real = {}
+
+    wf_data = payload.get("payload", {}).get("data", {})
+
+    for key, value in wf_data.items():
         if key.startswith("data[") and key.endswith("]"):
             clean = key[5:-1]
-            parsed[clean] = value
+            real[clean] = value
 
-    # fallback: обычные ключи
-    for key, value in form.items():
-        if key not in parsed and "[" not in key:
-            parsed[key] = value
-
-    return parsed
+    return real
 
 
-# ==========================
-#      MAIN ENDPOINT
-# ==========================
 @app.route("/new_invoice", methods=["POST"])
 def new_invoice():
 
     log.info("\n========== NEW REQUEST ==========")
     log.info("Headers: %s", dict(request.headers))
+
     raw = request.get_data().decode(errors="ignore")
     log.info("RAW BODY: %s", raw)
-    log.info("Form: %s", request.form.to_dict())
-    log.info("JSON: %s", request.get_json(silent=True))
+
+    form = request.form.to_dict()
+    log.info("Form: %s", form)
+
+    json_payload = request.get_json(silent=True)
+    log.info("JSON: %s", json_payload)
 
     data = {}
 
-    # ---------- 1. JSON ----------
-    payload = request.get_json(silent=True)
-    if payload:
-        log.info("Detected JSON payload")
-        data = payload.get("data", payload)
+    # -------- CASE 1: JSON от Webflow ----------
+    if json_payload and "payload" in json_payload:
+        log.info("Detected Webflow JSON format")
+        data = parse_webflow_json(json_payload)
 
-    # ---------- 2. FORM-DATA ----------
-    elif request.form:
-        log.info("Detected Webflow form-data")
-        data = parse_webflow_form()
+    # -------- CASE 2: обычная форма ----------
+    elif form:
+        log.info("Detected Webflow form-data format")
+        for key, value in form.items():
+            if key.startswith("data[") and key.endswith("]"):
+                data[key[5:-1]] = value
+            else:
+                data[key] = value
 
-    # ---------- 3. RAW fallback ----------
+    # -------- CASE 3: fallback ----------
     else:
-        log.info("Fallback parse (RAW urlencoded)")
-        pairs = raw.split("&")
-        for pair in pairs:
+        log.info("Fallback parse")
+        for pair in raw.split("&"):
             if "=" in pair:
                 k, v = pair.split("=", 1)
                 k = k.replace("data[", "").replace("]", "")
                 data[k] = v.replace("+", " ")
 
-    log.info("📥 Parsed DATA: %s", data)
+    log.info("📥 FINAL PARSED DATA: %s", data)
 
-    # ---------- 4. Extract ----------
+    # -------- Extract fields ----------
     client = data.get("client")
     service = data.get("service")
     amount = data.get("amount")
@@ -86,24 +81,14 @@ def new_invoice():
     date = data.get("date")
     email = data.get("email")
 
-    # ---------- 5. Validation ----------
     if not all([client, service, amount, currency, email]):
-        log.error("❌ Missing fields: %s", data)
-        return jsonify({"error": "missing fields", "got": data}), 400
+        log.error("❌ Missing fields!")
+        return jsonify({"error": "missing fields", "received": data}), 400
 
-    # ---------- 6. PDF ----------
     pdf_path = create_invoice_pdf(client, service, amount, currency, date)
-
-    # ---------- 7. Email ----------
     send_invoice_email(email, client, pdf_path, amount, currency, service)
 
-    return jsonify({
-        "status": "ok",
-        "client": client,
-        "service": service,
-        "email": email,
-        "pdf": pdf_path
-    })
+    return jsonify({"status": "ok", "data": data, "pdf": pdf_path})
 
 
 if __name__ == "__main__":
