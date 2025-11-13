@@ -3,6 +3,17 @@ from invoice_generator import create_invoice_pdf
 from send_email import send_invoice_email
 import os
 from dotenv import load_dotenv
+import logging
+import sys
+
+# ---------- ЛОГИ ----------
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+log = logging.getLogger(__name__)
+# --------------------------
 
 load_dotenv()
 app = Flask(__name__)
@@ -10,41 +21,49 @@ app = Flask(__name__)
 @app.route("/new_invoice", methods=["POST"])
 def new_invoice():
 
-    # ---------- RAW DEBUG LOGS ----------
-    print("\n========== RAW LOGS ==========")
-    print("Headers:", dict(request.headers))
-    print("Form:", request.form.to_dict())
-    print("JSON:", request.get_json(silent=True))
-    print("================================\n")
-    # ------------------------------------
+    log.info("=========== NEW REQUEST ===========")
 
-    # ---------- 1. Пытаемся получить JSON ----------
+    log.info("Headers: %s", dict(request.headers))
+    log.info("RAW BODY: %s", request.get_data().decode(errors="ignore"))
+    log.info("Form: %s", request.form.to_dict())
+    log.info("JSON: %s", request.get_json(silent=True))
+
+    data = {}
+
+    # ---------- 1. JSON ----------
     payload = request.get_json(silent=True)
-
     if payload:
-        # либо payload["data"], либо сам JSON
+        log.info("Detected JSON payload")
         data = payload.get("data", payload)
-    else:
-        # ---------- 2. Если JSON нет — значит пришла форма ----------
+
+    # ---------- 2. Form ----------
+    elif request.form:
+        log.info("Detected FORM payload")
         form = request.form.to_dict()
 
-        data = {}
-
-        # вариант A: Webflow format: data[client], data[email], ...
         for key, value in form.items():
             if key.startswith("data[") and key.endswith("]"):
-                clean = key[5:-1]   # вырезает data[ и ]
-                data[clean] = value
+                data[key[5:-1]] = value
 
-        # вариант B: вдруг поля пришли как обычные: client, email, etc.
-        # (подстраховка)
-        for key, value in form.items():
-            if key not in data and "[" not in key:
+            # fallback
+            elif "[" not in key:
                 data[key] = value
 
-    print("📥 Получены данные (после парсинга):", data)
+    # ---------- 3. RAW URLENCODED ----------
+    else:
+        raw = request.get_data().decode(errors="ignore")
+        if raw:
+            log.info("Detected RAW urlencoded payload")
+            pairs = raw.split("&")
+            for pair in pairs:
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    k = k.replace("data[", "").replace("]", "")
+                    data[k] = v.replace("+", " ")
 
-    # ---------- 3. Достаём поля ----------
+    log.info("Parsed DATA: %s", data)
+
+    # ---------- Extract ----------
     client = data.get("client")
     service = data.get("service")
     amount = data.get("amount")
@@ -52,19 +71,11 @@ def new_invoice():
     date = data.get("date")
     email = data.get("email")
 
-    # ---------- 4. Проверяем ----------
     if not all([client, service, amount, currency, email]):
-        print("❌ Ошибка: нет нужных полей!")
+        log.error("❌ Missing fields: %s", data)
         return jsonify({"error": "missing fields"}), 400
 
-    # ---------- 5. Генерация PDF ----------
     pdf_path = create_invoice_pdf(client, service, amount, currency, date)
-
-    # ---------- 6. Отправка email ----------
     send_invoice_email(email, client, pdf_path, amount, currency, service)
 
-    return jsonify({"status": "ok", "client": client, "pdf": pdf_path})
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    return jsonify({"status": "ok", "client": client})
