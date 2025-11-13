@@ -10,6 +10,14 @@ app = Flask(__name__)
 @app.route("/new_invoice", methods=["POST"])
 def new_invoice():
 
+    # ---------- RAW DEBUG LOGS ----------
+    print("\n========== RAW LOGS ==========")
+    print("Headers:", dict(request.headers))
+    print("Form:", request.form.to_dict())
+    print("JSON:", request.get_json(silent=True))
+    print("================================\n")
+    # ------------------------------------
+
     # ---------- 1. Пытаемся получить JSON ----------
     payload = request.get_json(silent=True)
 
@@ -17,18 +25,24 @@ def new_invoice():
         # либо payload["data"], либо сам JSON
         data = payload.get("data", payload)
     else:
-        # ---------- 2. Иначе пришла Webflow form-data ----------
+        # ---------- 2. Если JSON нет — значит пришла форма ----------
         form = request.form.to_dict()
 
-        # Webflow отправляет: data[client], data[email], ...
-        # Преобразуем в client, email, ...
         data = {}
+
+        # вариант A: Webflow format: data[client], data[email], ...
         for key, value in form.items():
             if key.startswith("data[") and key.endswith("]"):
                 clean = key[5:-1]   # вырезает data[ и ]
                 data[clean] = value
 
-    print("📥 Получены данные:", data)
+        # вариант B: вдруг поля пришли как обычные: client, email, etc.
+        # (подстраховка)
+        for key, value in form.items():
+            if key not in data and "[" not in key:
+                data[key] = value
+
+    print("📥 Получены данные (после парсинга):", data)
 
     # ---------- 3. Достаём поля ----------
     client = data.get("client")
@@ -40,6 +54,7 @@ def new_invoice():
 
     # ---------- 4. Проверяем ----------
     if not all([client, service, amount, currency, email]):
+        print("❌ Ошибка: нет нужных полей!")
         return jsonify({"error": "missing fields"}), 400
 
     # ---------- 5. Генерация PDF ----------
